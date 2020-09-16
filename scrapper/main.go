@@ -183,7 +183,8 @@ func saveRepos(db *gorm.DB, in <-chan []*repository,
 	log.Printf("saveRepos finished")
 }
 
-func counter(threshold int, in <-chan int, done chan<- struct{}, wg *sync.WaitGroup) {
+func counter(threshold int, in <-chan int,
+	done chan<- struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
 	defer close(done)
 
