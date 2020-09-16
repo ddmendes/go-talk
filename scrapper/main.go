@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"io/ioutil"
+	"log"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/go-github/v32/github"
@@ -31,6 +34,7 @@ var tokenFileName = ".ghtoken"
 var pgDsn = "host=localhost port=5432 user=root password=toor dbname=ghdata"
 
 func main() {
+	log.SetOutput(os.Stdout)
 	db, err := gorm.Open(postgres.Open(pgDsn), &gorm.Config{})
 	db.AutoMigrate(&repository{})
 	if err != nil {
@@ -57,19 +61,140 @@ func getGitHubClient(ctx context.Context) *github.Client {
 }
 
 func scrapRepos(ctx context.Context, client *github.Client, db *gorm.DB) {
-	repo, _, err := client.Repositories.Get(ctx, "ddmendes", "go-talk")
-	if err != nil {
-		panic(err)
+	ghReposChan := make(chan []*github.Repository)
+	ghRepoChan := make(chan *github.Repository)
+	repoChan := make(chan *repository)
+	reposChan := make(chan []*repository)
+	count := make(chan int)
+	done := make(chan struct{})
+	wg := &sync.WaitGroup{}
+	wg.Add(6)
+
+	go func() { readRepos(ctx, client, ghReposChan, done, wg) }()
+	go func() { readRepo(ctx, client, ghReposChan, ghRepoChan, wg) }()
+	go func() { convertRepos(ghRepoChan, repoChan, wg) }()
+	go func() { groupRepos(100, repoChan, reposChan, wg) }()
+	go func() { saveRepos(db, reposChan, count, wg) }()
+	go func() { counter(1000000, count, done, wg) }()
+	wg.Wait()
+}
+
+func readRepos(ctx context.Context, client *github.Client,
+	out chan<- []*github.Repository, done <-chan struct{}, wg *sync.WaitGroup) {
+	defer wg.Done()
+	defer close(out)
+
+	log.Printf("readRepos started")
+	options := &github.RepositoryListAllOptions{
+		Since: 0,
 	}
-	r := repository{
-		Owner:       *repo.Owner.Login,
-		Name:        *repo.Name,
-		Stars:       *repo.StargazersCount,
-		Forks:       *repo.ForksCount,
-		Subscribers: *repo.SubscribersCount,
-		Watchers:    *repo.WatchersCount,
-		OpenIssues:  *repo.OpenIssuesCount,
-		Size:        *repo.Size,
+
+	keepGoing := true
+	for keepGoing {
+		repos, _, err := client.Repositories.ListAll(ctx, options)
+		if err != nil || len(repos) == 0 {
+			break
+		}
+		options.Since = *repos[len(repos)-1].ID
+		log.Printf("Read %d repos from GitHub", len(repos))
+		select {
+		case out <- repos:
+		case <-done:
+			log.Print("readRepos: received done signal")
+			keepGoing = false
+		}
 	}
-	db.Create(&r)
+	log.Printf("readRepos finished")
+}
+
+func readRepo(ctx context.Context, client *github.Client,
+	in <-chan []*github.Repository, out chan<- *github.Repository,
+	wg *sync.WaitGroup) {
+	defer wg.Done()
+	defer close(out)
+
+	log.Printf("readRepo started")
+	for ghRepos := range in {
+		for _, ghRepo := range ghRepos {
+			repo, _, err := client.Repositories.GetByID(ctx, *ghRepo.ID)
+			if err != nil {
+				continue
+			}
+
+			out <- repo
+		}
+	}
+	log.Printf("readRepo finished")
+}
+
+func convertRepos(in <-chan *github.Repository, out chan<- *repository,
+	wg *sync.WaitGroup) {
+	defer wg.Done()
+	defer close(out)
+
+	log.Printf("convertRepos started")
+	for ghRepo := range in {
+		repo := &repository{
+			Owner:       *ghRepo.Owner.Login,
+			Name:        *ghRepo.Name,
+			Stars:       *ghRepo.StargazersCount,
+			Forks:       *ghRepo.ForksCount,
+			Subscribers: *ghRepo.SubscribersCount,
+			Watchers:    *ghRepo.WatchersCount,
+			OpenIssues:  *ghRepo.OpenIssuesCount,
+			Size:        *ghRepo.Size,
+		}
+		out <- repo
+	}
+	log.Printf("convertRepos finished")
+}
+
+func groupRepos(batchSize int, in <-chan *repository,
+	out chan<- []*repository, wg *sync.WaitGroup) {
+	defer wg.Done()
+	defer close(out)
+
+	log.Printf("groupRepos started. Batch size: %d entries", batchSize)
+	repos := make([]*repository, 0, batchSize)
+	for repo := range in {
+		repos = append(repos, repo)
+		if len(repos) == cap(repos) {
+			out <- repos
+			repos = make([]*repository, 0, batchSize)
+		}
+	}
+
+	if len(repos) > 0 {
+		out <- repos
+	}
+	log.Printf("groupRepos finished")
+}
+
+func saveRepos(db *gorm.DB, in <-chan []*repository,
+	count chan<- int, wg *sync.WaitGroup) {
+	defer wg.Done()
+	defer close(count)
+
+	log.Printf("saveRepos started")
+	for repos := range in {
+		db.Create(repos)
+		count <- len(repos)
+	}
+	log.Printf("saveRepos finished")
+}
+
+func counter(threshold int, in <-chan int, done chan<- struct{}, wg *sync.WaitGroup) {
+	defer wg.Done()
+	defer close(done)
+
+	log.Printf("counter started. Thershold: %d", threshold)
+	counter := 0
+	for count := range in {
+		counter += count
+		log.Printf("Counter: %d | Threshold: %d\n", counter, threshold)
+		if counter >= threshold {
+			break
+		}
+	}
+	log.Print("counter finished")
 }
