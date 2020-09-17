@@ -1,3 +1,5 @@
 .ghtoken
 *.log
 config.json
+update-job
+scrapper

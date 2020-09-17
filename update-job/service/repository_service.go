@@ -11,7 +11,7 @@ import (
 	"github.com/google/go-github/v32/github"
 )
 
-// RepositoryService access point Repository logics
+// RepositoryService access point to service logics
 type RepositoryService struct {
 	RepoDAO  *dao.RepositoryDAO
 	GHClient *github.Client
@@ -23,7 +23,7 @@ type message struct {
 	remoteRepo *github.Repository
 }
 
-// UpdateAll updates all Repositories
+// UpdateAll updates all entries
 func (s *RepositoryService) UpdateAll() {
 	readLocalChan := make(chan []model.Repository)
 	readRemoteChan := make(chan *message)
@@ -124,6 +124,7 @@ func (s *RepositoryService) filter(in <-chan *message, out chan<- *model.Reposit
 			out <- m.localRepo
 		}
 	}
+
 }
 
 func (s *RepositoryService) write(in <-chan *model.Repository, wg *sync.WaitGroup) {
