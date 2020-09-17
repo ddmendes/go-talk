@@ -176,3 +176,12 @@ https://go.dev/solutions
 
 # Live Coding
 
+---
+
+# References
+
+https://go.dev/
+
+https://talks.golang.org/2012/splash.article
+
+https://golang.org/doc/faq
