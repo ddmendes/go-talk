@@ -168,3 +168,11 @@ https://eng.uber.com/schemaless-rewrite/
 
 https://go.dev/solutions
 
+---
+
+# Questions?
+
+---
+
+# Live Coding
+
