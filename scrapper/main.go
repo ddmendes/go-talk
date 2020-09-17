@@ -70,12 +70,12 @@ func scrapRepos(ctx context.Context, client *github.Client, db *gorm.DB) {
 	wg := &sync.WaitGroup{}
 	wg.Add(6)
 
-	go func() { readRepos(ctx, client, ghReposChan, done, wg) }()
-	go func() { readRepo(ctx, client, ghReposChan, ghRepoChan, wg) }()
-	go func() { convertRepos(ghRepoChan, repoChan, wg) }()
-	go func() { groupRepos(100, repoChan, reposChan, wg) }()
-	go func() { saveRepos(db, reposChan, count, wg) }()
-	go func() { counter(1000000, count, done, wg) }()
+	go readRepos(ctx, client, ghReposChan, done, wg)
+	go readRepo(ctx, client, ghReposChan, ghRepoChan, wg)
+	go convertRepos(ghRepoChan, repoChan, wg)
+	go groupRepos(100, repoChan, reposChan, wg)
+	go saveRepos(db, reposChan, count, wg)
+	go counter(1000000, count, done, wg)
 	wg.Wait()
 }
 
