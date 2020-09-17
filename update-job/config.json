@@ -1,5 +1,0 @@
-{
-	"PostgresDSN": "host=localhost port=5432 user=root password=toor dbname=ghdata",
-	"GitHubToken": "d76427863a952520db06cc2a7216510e279e7444",
-	"PageSize": 100
-}

@@ -27,7 +27,7 @@ func main() {
 	}
 	repoService := &service.RepositoryService{
 		RepoDAO:  repoDAO,
-		GhClient: ghClient,
+		GHClient: ghClient,
 		Ctx:      ctx,
 	}
 	repoService.UpdateAll()

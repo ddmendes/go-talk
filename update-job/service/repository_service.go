@@ -11,129 +11,133 @@ import (
 	"github.com/google/go-github/v32/github"
 )
 
-// RepositoryService access point to service
+// RepositoryService access point Repository logics
 type RepositoryService struct {
 	RepoDAO  *dao.RepositoryDAO
-	GhClient *github.Client
+	GHClient *github.Client
 	Ctx      context.Context
 }
 
-// Message wraps info through the pipeline
-type Message struct {
+type message struct {
 	localRepo  *model.Repository
 	remoteRepo *github.Repository
 }
 
-// UpdateAll updates all repositories
+// UpdateAll updates all Repositories
 func (s *RepositoryService) UpdateAll() {
-	localReposChan := make(chan []model.Repository)
-	remoteReposChan := make(chan *Message)
-	filterChan := make(chan *Message)
+	readLocalChan := make(chan []model.Repository)
+	readRemoteChan := make(chan *message)
+	filterChan := make(chan *message)
 	writeChan := make(chan *model.Repository)
 	wg := &sync.WaitGroup{}
 
 	wg.Add(5)
-	go s.readLocal(localReposChan, wg)
-	go s.fanOut(localReposChan, remoteReposChan, wg)
+	go s.readLocal(readLocalChan, wg)
+	go s.fanOut(readLocalChan, readRemoteChan, wg)
+
+	remoteWG := &sync.WaitGroup{}
+	go func() {
+		remoteWG.Wait()
+		close(filterChan)
+		wg.Done()
+	}()
 	for i := 0; i < runtime.NumCPU(); i++ {
-		wg.Add(1)
-		go s.readRemote(remoteReposChan, filterChan, wg)
+		remoteWG.Add(1)
+		go s.readRemote(readRemoteChan, filterChan, remoteWG)
 	}
+
 	go s.filter(filterChan, writeChan, wg)
 	go s.write(writeChan, wg)
 	wg.Wait()
 }
 
-func (s *RepositoryService) readLocal(out chan<- []model.Repository,
-	wg *sync.WaitGroup) {
+func (s *RepositoryService) readLocal(out chan<- []model.Repository, wg *sync.WaitGroup) {
 	defer wg.Done()
 	defer close(out)
 	defer func() { log.Println("readLocal finished") }()
 
 	log.Println("readLocal started")
+
 	page := 0
-	keepReading := true
 	counter := 0
+	keepReading := true
 	for keepReading {
 		repos, err := s.RepoDAO.GetAllByPage(page)
 		switch {
 		case err != nil:
-			log.Printf("Failed to read page %d: %s", page, err.Error())
+			log.Printf("Failed to read local repo: %s", err.Error())
 			fallthrough
 		case len(repos) <= 0:
 			keepReading = false
 		default:
 			counter += len(repos)
-			log.Printf("readLocal: read %d entries from local. Total: %d",
-				len(repos), counter)
+			log.Printf("Read %d repos. Total: %d", len(repos), counter)
 			out <- repos
 		}
 		page++
 	}
 }
 
-func (s *RepositoryService) fanOut(in <-chan []model.Repository,
-	out chan<- *Message, wg *sync.WaitGroup) {
+func (s *RepositoryService) fanOut(in <-chan []model.Repository, out chan<- *message, wg *sync.WaitGroup) {
 	defer wg.Done()
 	defer close(out)
 	defer func() { log.Println("fanOut finished") }()
 
 	log.Println("fanOut started")
-	for repos := range in {
-		for _, repo := range repos {
-			out <- &Message{localRepo: &repo}
+	for batch := range in {
+		for _, repo := range batch {
+			msg := &message{
+				localRepo: &repo,
+			}
+			out <- msg
 		}
 	}
 }
 
-func (s *RepositoryService) readRemote(in <-chan *Message,
-	out chan<- *Message, wg *sync.WaitGroup) {
+func (s *RepositoryService) readRemote(in <-chan *message, out chan<- *message, wg *sync.WaitGroup) {
 	defer wg.Done()
-	defer close(out)
 	defer func() { log.Println("readRemote finished") }()
 
 	log.Println("readRemote started")
-	for message := range in {
-		remoteRepo, _, err := s.GhClient.Repositories.Get(
-			s.Ctx, message.localRepo.Owner, message.localRepo.Name)
+	for m := range in {
+		remoteRepo, _, err := s.GHClient.Repositories.Get(
+			s.Ctx, m.localRepo.Owner, m.localRepo.Name)
 		if err != nil {
-			log.Printf("Failed to read repo %s/%s from GitHub: %s",
-				message.localRepo.Owner, message.localRepo.Name, err.Error())
+			log.Printf("Could not read %s/%s: %s",
+				m.localRepo.Owner, m.localRepo.Name, err.Error())
 			continue
 		}
-		message.remoteRepo = remoteRepo
-		out <- message
+		m.remoteRepo = remoteRepo
+		out <- m
 	}
 }
 
-func (s *RepositoryService) filter(in <-chan *Message,
-	out chan<- *model.Repository, wg *sync.WaitGroup) {
+func (s *RepositoryService) filter(in <-chan *message, out chan<- *model.Repository, wg *sync.WaitGroup) {
 	defer wg.Done()
 	defer close(out)
 	defer func() { log.Println("filter finished") }()
 
 	log.Println("filter started")
-	for message := range in {
-		if !areReposEquals(message.localRepo, message.remoteRepo) {
-			updateRepo(message.localRepo, message.remoteRepo)
-			out <- message.localRepo
+	for m := range in {
+		if !areReposEquals(m.localRepo, m.remoteRepo) {
+			updateRepo(m.localRepo, m.remoteRepo)
+			out <- m.localRepo
 		}
 	}
 }
 
-func (s *RepositoryService) write(
-	in <-chan *model.Repository, wg *sync.WaitGroup) {
+func (s *RepositoryService) write(in <-chan *model.Repository, wg *sync.WaitGroup) {
+	counter := 0
 	defer wg.Done()
 	defer func() { log.Println("write finished") }()
 
 	log.Println("write started")
-	counter := 0
 	for repo := range in {
+		s.RepoDAO.Save(repo)
 		counter++
 		if counter%50 == 0 {
-			log.Printf("write: saved %d repos", counter)
+			log.Printf("Wrote %d repositories", counter)
 		}
-		s.RepoDAO.Save(repo)
 	}
 }
 

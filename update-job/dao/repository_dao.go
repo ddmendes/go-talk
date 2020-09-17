@@ -42,9 +42,6 @@ func (dao *RepositoryDAO) GetAllByPage(page int) ([]model.Repository, error) {
 	defer rows.Close()
 
 	if err != nil {
-		// if errors.Is(err, gorm.ErrRecordNotFound) {
-		// 	return []model.Repository{}, nil
-		// }
 		return nil, err
 	}
 
